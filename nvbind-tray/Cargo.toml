@@ -10,7 +10,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 zbus = { workspace = true }
-gtk = { version = "0.18", package = "gtk", features = ["v3_24"] }
-libappindicator = "0.7"
+ksni = { version = "0.3", features = ["blocking"] }
 notify-rust = "4"
 nvbind-core = { path = "../nvbind-core" }
+tokio = { version = "1", features = ["rt", "time"] }
