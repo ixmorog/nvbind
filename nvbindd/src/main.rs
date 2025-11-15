@@ -1,9 +1,12 @@
+mod polkit;
+
 use anyhow::Result;
-use nvbind_core::{list_nvidia_gpus, bind_to_nvidia, bind_to_vfio, unbind};
+use nvbind_core::{bind_to_nvidia, bind_to_vfio, list_nvidia_gpus, unbind};
 use serde::{Deserialize, Serialize};
 use tokio::signal;
-use tracing::{info};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
+use zbus::message::Header;
 use zbus::{fdo, interface, Connection};
 
 const BUS_NAME: &str = "org.example.NvBind";
@@ -22,21 +25,52 @@ impl NvBindIface {
         let gpus = list_nvidia_gpus().map_err(map_e)?;
         Ok(serde_json::to_string(&Status { gpus }).unwrap())
     }
-
-    async fn bind_to_nvidia(&self, bdf: &str) -> zbus::fdo::Result<()> {
-        // Авторизация через polkit делаем на уровне D-Bus политики/правил
+    async fn bind_to_nvidia(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &Connection,
+        bdf: &str,
+    ) -> fdo::Result<()> {
+        let sender = hdr
+            .sender()
+            .ok_or_else(|| fdo::Error::Failed("no sender".into()))?;
+        polkit::check_authz(conn, sender.as_str())
+            .await
+            .map_err(map_e)?;
         unbind(bdf).map_err(map_e)?;
         bind_to_nvidia(bdf).map_err(map_e)?;
         Ok(())
     }
 
-    async fn bind_to_vfio(&self, bdf: &str) -> zbus::fdo::Result<()> {
+    async fn bind_to_vfio(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &Connection,
+        bdf: &str,
+    ) -> fdo::Result<()> {
+        let sender = hdr
+            .sender()
+            .ok_or_else(|| fdo::Error::Failed("no sender".into()))?;
+        polkit::check_authz(conn, sender.as_str())
+            .await
+            .map_err(map_e)?;
         unbind(bdf).map_err(map_e)?;
         bind_to_vfio(bdf).map_err(map_e)?;
         Ok(())
     }
 
-    async fn unbind(&self, bdf: &str) -> zbus::fdo::Result<()> {
+    async fn unbind(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &Connection,
+        bdf: &str,
+    ) -> fdo::Result<()> {
+        let sender = hdr
+            .sender()
+            .ok_or_else(|| fdo::Error::Failed("no sender".into()))?;
+        polkit::check_authz(conn, sender.as_str())
+            .await
+            .map_err(map_e)?;
         unbind(bdf).map_err(map_e)?;
         Ok(())
     }
@@ -50,7 +84,10 @@ fn map_e(e: anyhow::Error) -> fdo::Error {
 async fn main() -> Result<()> {
     // journald-friendly logging
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).with_target(false).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .init();
 
     info!("nvbindd starting…");
 

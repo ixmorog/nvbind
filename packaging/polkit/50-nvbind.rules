@@ -1,7 +1,6 @@
 polkit.addRule(function(action, subject) {
-  if (action.id == "org.example.nvbind.manage") {
-    if (subject.isInGroup("wheel") && subject.active) {
-      return polkit.Result.YES;
-    }
+  if (action && action.id === "org.example.nvbind.manage" &&
+      subject && subject.active && subject.isInGroup("wheel")) {
+    return polkit.Result.YES;
   }
 });

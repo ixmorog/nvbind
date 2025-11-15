@@ -64,19 +64,19 @@ impl ksni::Tray for MyTray {
     fn icon_name(&self) -> String {
         "video-display".into()
     }
-    fn tool_tip(&self) -> ToolTip {
-        ToolTip {
-            title: "NVBind".into(),
-            description: "NVIDIA GPU binding manager".into(),
-            ..Default::default()
-        }
-    }
     fn icon_pixmap(&self) -> Vec<Icon> {
         vec![Icon {
             width: 1,
             height: 1,
             data: vec![0, 0, 0, 0],
         }]
+    }
+    fn tool_tip(&self) -> ToolTip {
+        ToolTip {
+            title: "NVBind".into(),
+            description: "NVIDIA GPU binding manager".into(),
+            ..Default::default()
+        }
     }
 
     fn menu(&self) -> Vec<menu::MenuItem<Self>> {
