@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use serde::{Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
 use zbus::zvariant::{OwnedValue, Type};
 use zbus::{names::BusName, Connection, Proxy};

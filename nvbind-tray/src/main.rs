@@ -35,7 +35,7 @@ struct Status {
 #[derive(Clone)]
 struct Shared {
     status: Arc<Mutex<Status>>,
-    tx: UnboundedSender<Command>, // канал в наш фоновый async-рантайм
+    tx: UnboundedSender<Command>, // Fan-out channel into the async worker runtime.
 }
 
 #[derive(Clone)]
@@ -198,7 +198,7 @@ async fn call_method_async(method: &str, bdf: &str) -> Result<()> {
     Ok(())
 }
 
-// -------------------- Команды в фонового исполнителя --------------------
+// -------------------- Commands handled by the background worker --------------------
 
 enum Command {
     Refresh,
@@ -208,17 +208,17 @@ enum Command {
 }
 
 fn main() -> Result<()> {
-    // Канал команд в Async-рантайм (tokio)
+    // Channel that carries UI requests into the Tokio runtime.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
 
-    // Канал событий в UI-поток (std)
+    // Events emitted from the worker to the UI thread.
     let (ux_tx, ux_rx) = std_mpsc::channel::<UiEvent>();
 
-    // Поднимаем ksni (трей)
+    // Initialize the StatusNotifierItem tray.
     let tray = MyTray::new(tx.clone());
     let handle = tray.spawn().context("spawn tray")?;
 
-    // UI-поток: только update() и notify-rust
+    // UI thread: only update the tray state and show notifications.
     {
         let handle_ui = handle.clone();
         thread::spawn(move || {
@@ -244,7 +244,7 @@ fn main() -> Result<()> {
         });
     }
 
-    // Async-рантайм: только D-Bus (zbus) и отправка событий в UI
+    // Async runtime: talks to D-Bus via zbus and forwards status updates.
     thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_io()
@@ -304,7 +304,7 @@ fn main() -> Result<()> {
         });
     });
 
-    // держим главный поток живым
+    // Keep the main thread alive so the tray process does not exit early.
     loop {
         thread::sleep(Duration::from_secs(3600));
     }

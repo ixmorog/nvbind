@@ -82,7 +82,7 @@ fn map_e(e: anyhow::Error) -> fdo::Error {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // journald-friendly logging
+    // Initialize journald-friendly logging early so errors during startup are captured.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -91,17 +91,16 @@ async fn main() -> Result<()> {
 
     info!("nvbindd starting…");
 
-    // Соединение с системным шиной
+    // Connect to the system bus and expose the D-Bus object tree.
     let conn = Connection::system().await?;
 
-    // Регистрируем объект
+    // Register the object path and claim the well-known name.
     conn.object_server().at(OBJ_PATH, NvBindIface).await?;
-    // Запрашиваем имя
     conn.request_name(BUS_NAME).await?;
 
     info!("D-Bus name acquired: {}", BUS_NAME);
 
-    // Блокируемся до Ctrl+C / stop
+    // Block until the service receives Ctrl+C or the unit is stopped.
     signal::ctrl_c().await?;
     info!("nvbindd exiting");
     Ok(())
