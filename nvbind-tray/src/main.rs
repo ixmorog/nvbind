@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use ksni::blocking::TrayMethods;
-use ksni::{self, menu, Icon, ToolTip};
+use ksni::{self, Icon, ToolTip, menu};
 use notify_rust::Notification;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -30,6 +31,39 @@ struct Gpu {
 #[derive(Debug, Deserialize, Clone, Default)]
 struct Status {
     gpus: Vec<Gpu>,
+}
+
+#[derive(Clone)]
+struct DeviceGroup {
+    base: String,
+    video: Option<Gpu>,
+    audio: Option<Gpu>,
+    others: Vec<Gpu>,
+}
+
+impl DeviceGroup {
+    fn new(base: String) -> Self {
+        Self {
+            base,
+            video: None,
+            audio: None,
+            others: vec![],
+        }
+    }
+
+    fn all_bdfs(&self) -> Vec<String> {
+        let mut bdfs = vec![];
+        if let Some(v) = &self.video {
+            bdfs.push(v.bdf.clone());
+        }
+        if let Some(a) = &self.audio {
+            bdfs.push(a.bdf.clone());
+        }
+        for other in &self.others {
+            bdfs.push(other.bdf.clone());
+        }
+        bdfs
+    }
 }
 
 #[derive(Clone)]
@@ -93,7 +127,8 @@ impl ksni::Tray for MyTray {
             menu::MenuItem::Separator,
         ];
 
-        if st.gpus.is_empty() {
+        let groups = group_gpus(&st.gpus);
+        if groups.is_empty() {
             items.push(
                 menu::StandardItem {
                     label: "No NVIDIA GPU found".into(),
@@ -103,14 +138,8 @@ impl ksni::Tray for MyTray {
                 .into(),
             );
         } else {
-            for g in st.gpus {
-                let hdr = format!(
-                    "{} [{}:{}] [{}]",
-                    g.bdf,
-                    g.vendor,
-                    g.device,
-                    g.driver.clone().unwrap_or_else(|| "none".into())
-                );
+            for group in groups {
+                let hdr = format_group_header(&group);
                 items.push(
                     menu::StandardItem {
                         label: hdr,
@@ -120,36 +149,62 @@ impl ksni::Tray for MyTray {
                     .into(),
                 );
 
-                let bdf_nv = g.bdf.clone();
+                let video_bdf = group.video.as_ref().map(|g| g.bdf.clone());
+                let video_bdf_for_closure = video_bdf.clone();
+                let vfio_targets = group.all_bdfs();
+                let vfio_targets_for_bind = vfio_targets.clone();
+                let vfio_targets_for_unbind = vfio_targets.clone();
+                let has_video = video_bdf.is_some();
+                let has_devices = !vfio_targets.is_empty();
+
                 items.push(
                     menu::StandardItem {
-                        label: format!("  → Bind to nvidia ({})", bdf_nv),
+                        label: format!(
+                            "  → Bind to nvidia ({})",
+                            video_bdf.as_deref().unwrap_or("n/a")
+                        ),
+                        enabled: has_video,
                         activate: Box::new(move |this: &mut MyTray| {
-                            let _ = this.shared.tx.send(Command::BindToNvidia(bdf_nv.clone()));
+                            if let Some(bdf) = &video_bdf_for_closure {
+                                let _ =
+                                    this.shared.tx.send(Command::BindVideoToNvidia(bdf.clone()));
+                            }
                         }),
                         ..Default::default()
                     }
                     .into(),
                 );
 
-                let bdf_vfio = g.bdf.clone();
                 items.push(
                     menu::StandardItem {
-                        label: format!("  → Bind to vfio-pci ({})", bdf_vfio),
+                        label: format!("  → Bind to vfio-pci ({})", format_bdf_list(&vfio_targets)),
+                        enabled: has_devices,
                         activate: Box::new(move |this: &mut MyTray| {
-                            let _ = this.shared.tx.send(Command::BindToVfio(bdf_vfio.clone()));
+                            if vfio_targets_for_bind.is_empty() {
+                                return;
+                            }
+                            let _ = this
+                                .shared
+                                .tx
+                                .send(Command::BindGroupToVfio(vfio_targets_for_bind.clone()));
                         }),
                         ..Default::default()
                     }
                     .into(),
                 );
 
-                let bdf_un = g.bdf.clone();
                 items.push(
                     menu::StandardItem {
-                        label: format!("  → Unbind ({})", bdf_un),
+                        label: format!("  → Unbind ({})", format_bdf_list(&vfio_targets)),
+                        enabled: has_devices,
                         activate: Box::new(move |this: &mut MyTray| {
-                            let _ = this.shared.tx.send(Command::Unbind(bdf_un.clone()));
+                            if vfio_targets_for_unbind.is_empty() {
+                                return;
+                            }
+                            let _ = this
+                                .shared
+                                .tx
+                                .send(Command::UnbindGroup(vfio_targets_for_unbind.clone()));
                         }),
                         ..Default::default()
                     }
@@ -170,6 +225,63 @@ impl ksni::Tray for MyTray {
         );
 
         items
+    }
+}
+
+fn group_gpus(gpus: &[Gpu]) -> Vec<DeviceGroup> {
+    let mut groups: BTreeMap<String, DeviceGroup> = BTreeMap::new();
+    for gpu in gpus {
+        let (base, func) = split_bdf(&gpu.bdf);
+        let entry = groups
+            .entry(base.clone())
+            .or_insert_with(|| DeviceGroup::new(base));
+        match func.as_deref() {
+            Some("0") | None => entry.video = Some(gpu.clone()),
+            Some("1") => entry.audio = Some(gpu.clone()),
+            _ => entry.others.push(gpu.clone()),
+        }
+    }
+    groups.into_values().collect()
+}
+
+fn split_bdf(bdf: &str) -> (String, Option<String>) {
+    match bdf.rsplit_once('.') {
+        Some((base, func)) => (base.to_string(), Some(func.to_string())),
+        None => (bdf.to_string(), None),
+    }
+}
+
+fn format_group_header(group: &DeviceGroup) -> String {
+    let mut parts = vec![
+        format_device_or_placeholder(group.video.as_ref(), &group.base, "0", "video"),
+        format_device_or_placeholder(group.audio.as_ref(), &group.base, "1", "audio"),
+    ];
+    parts.extend(group.others.iter().map(format_device));
+    parts.join(" | ")
+}
+
+fn format_device(gpu: &Gpu) -> String {
+    format!(
+        "{} [{}:{}] [{}]",
+        gpu.bdf,
+        gpu.vendor,
+        gpu.device,
+        gpu.driver.clone().unwrap_or_else(|| "none".into())
+    )
+}
+
+fn format_device_or_placeholder(gpu: Option<&Gpu>, base: &str, func: &str, label: &str) -> String {
+    match gpu {
+        Some(dev) => format_device(dev),
+        None => format!("{}.{} [no {} function]", base, func, label),
+    }
+}
+
+fn format_bdf_list(bdfs: &[String]) -> String {
+    if bdfs.is_empty() {
+        "n/a".into()
+    } else {
+        bdfs.join(", ")
     }
 }
 
@@ -198,13 +310,20 @@ async fn call_method_async(method: &str, bdf: &str) -> Result<()> {
     Ok(())
 }
 
+async fn call_many_async(method: &str, bdfs: &[String]) -> Result<()> {
+    for bdf in bdfs {
+        call_method_async(method, bdf).await?;
+    }
+    Ok(())
+}
+
 // -------------------- Commands handled by the background worker --------------------
 
 enum Command {
     Refresh,
-    BindToNvidia(String),
-    BindToVfio(String),
-    Unbind(String),
+    BindVideoToNvidia(String),
+    BindGroupToVfio(Vec<String>),
+    UnbindGroup(Vec<String>),
 }
 
 fn main() -> Result<()> {
@@ -279,21 +398,36 @@ fn main() -> Result<()> {
                                     Err(e) => { let _ = ux_tx.send(UiEvent::NotifyErr(format!("{:#}", e))); }
                                 }
                             }
-                            Command::BindToNvidia(bdf) => {
+                            Command::BindVideoToNvidia(bdf) => {
                                 match call_method_async("BindToNvidia", &bdf).await {
-                                    Ok(_) => { let _ = ux_tx.send(UiEvent::NotifyOk("Bound to nvidia".into())); let _ = trigger_refresh(&ux_tx).await; }
+                                    Ok(_) => {
+                                        let _ = ux_tx
+                                            .send(UiEvent::NotifyOk(format!("Bound {} to nvidia", bdf)));
+                                        let _ = trigger_refresh(&ux_tx).await;
+                                    }
                                     Err(e) => { let _ = ux_tx.send(UiEvent::NotifyErr(format!("{:#}", e))); }
                                 }
                             }
-                            Command::BindToVfio(bdf) => {
-                                match call_method_async("BindToVfio", &bdf).await {
-                                    Ok(_) => { let _ = ux_tx.send(UiEvent::NotifyOk("Bound to vfio-pci".into())); let _ = trigger_refresh(&ux_tx).await; }
+                            Command::BindGroupToVfio(bdfs) => {
+                                match call_many_async("BindToVfio", &bdfs).await {
+                                    Ok(_) => {
+                                        let msg = format!(
+                                            "Bound {} to vfio-pci",
+                                            format_bdf_list(&bdfs)
+                                        );
+                                        let _ = ux_tx.send(UiEvent::NotifyOk(msg));
+                                        let _ = trigger_refresh(&ux_tx).await;
+                                    }
                                     Err(e) => { let _ = ux_tx.send(UiEvent::NotifyErr(format!("{:#}", e))); }
                                 }
                             }
-                            Command::Unbind(bdf) => {
-                                match call_method_async("Unbind", &bdf).await {
-                                    Ok(_) => { let _ = ux_tx.send(UiEvent::NotifyOk("Unbound".into())); let _ = trigger_refresh(&ux_tx).await; }
+                            Command::UnbindGroup(bdfs) => {
+                                match call_many_async("Unbind", &bdfs).await {
+                                    Ok(_) => {
+                                        let msg = format!("Unbound {}", format_bdf_list(&bdfs));
+                                        let _ = ux_tx.send(UiEvent::NotifyOk(msg));
+                                        let _ = trigger_refresh(&ux_tx).await;
+                                    }
                                     Err(e) => { let _ = ux_tx.send(UiEvent::NotifyErr(format!("{:#}", e))); }
                                 }
                             }
