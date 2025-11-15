@@ -587,12 +587,9 @@ dependencies = [
  "anyhow",
  "ksni",
  "notify-rust",
- "nvbind-core",
  "serde",
  "serde_json",
- "thiserror",
  "tokio",
- "tracing",
  "zbus",
 ]
 

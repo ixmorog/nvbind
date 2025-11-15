@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::io::ErrorKind;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -69,6 +70,24 @@ fn read_driver_name(driver_link: &Path) -> Option<String> {
     None
 }
 
+fn ensure_module_loaded(name: &str) -> Result<()> {
+    // если директория драйвера уже есть — всё ок
+    let dir = format!("/sys/bus/pci/drivers/{}", name);
+    if Path::new(&dir).exists() {
+        return Ok(());
+    }
+    // иначе пробуем загрузить модуль
+    // (демон под root, так что modprobe допустим)
+    let st = std::process::Command::new("modprobe")
+        .arg(name)
+        .status()
+        .context("spawn modprobe")?;
+    if !st.success() {
+        anyhow::bail!("modprobe {} failed with status {}", name, st);
+    }
+    Ok(())
+}
+
 fn write_str(path: &Path, val: &str) -> Result<()> {
     debug!("writing '{}' to {}", val, path.display());
     fs::write(path, val).with_context(|| format!("write to {}", path.display()))
@@ -106,23 +125,47 @@ pub fn bind_to_nvidia(bdf: &str) -> Result<()> {
     write_str(&path, bdf)
 }
 
-pub fn bind_to_vfio(bdf: &str) -> Result<()> {
-    let devpath = PathBuf::from("/sys/bus/pci/devices").join(bdf);
-    let vendor = fs::read_to_string(devpath.join("vendor"))?
-        .trim()
-        .trim_start_matches("0x")
-        .to_string();
-    let device = fs::read_to_string(devpath.join("device"))?
-        .trim()
-        .trim_start_matches("0x")
-        .to_string();
+fn dev_paths(bdf: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let dev = PathBuf::from(format!("/sys/bus/pci/devices/{}", bdf));
+    (dev.clone(), dev.join("driver"), dev.join("driver_override"))
+}
 
-    ensure_module("vfio-pci")?;
-    // Allow vfio-pci to claim this ID
-    write_str(
-        Path::new("/sys/bus/pci/drivers/vfio-pci/new_id"),
-        &format!("{} {}", vendor, device),
-    )?;
-    // Then bind
-    write_str(Path::new("/sys/bus/pci/drivers/vfio-pci/bind"), bdf)
+pub fn bind_to_vfio(bdf: &str) -> Result<()> {
+    // Ensure the vfio-pci kernel module is loaded
+    ensure_module_loaded("vfio-pci")?;
+
+    let (_dev, driver_link, driver_override) = dev_paths(bdf);
+
+    // 1) Set the device-level driver override to "vfio-pci"
+    write_str(&driver_override, "vfio-pci\n").context("set driver_override=vfio-pci")?;
+
+    // 2) If the device is already bound to another driver — unbind it
+    if driver_link.exists() {
+        let unbind = driver_link.join("unbind");
+        write_str(&unbind, &format!("{}\n", bdf))
+            .or_else(|e| {
+                if e.downcast_ref::<std::io::Error>().map(|io| io.kind())
+                    == Some(ErrorKind::ResourceBusy)
+                {
+                    // Device is busy — return a clear, user-friendly error
+                    anyhow::bail!(
+                        "device {} is busy; close users \
+                        (Xorg/Wayland, CUDA, nvidia-persistenced) and retry",
+                        bdf
+                    );
+                }
+                Err(e)
+            })
+            .context("unbind from current driver")?;
+    }
+
+    // 3) Bind the device to the vfio-pci driver
+    let vfio_bind = Path::new("/sys/bus/pci/drivers/vfio-pci/bind");
+    write_str(vfio_bind, &format!("{}\n", bdf)).context("bind to vfio-pci")?;
+
+    // 4) (Optional) Clear the override so that the device can be reattached normally later
+    // If you prefer to keep the binding persistent across reboots or module reloads, skip this step.
+    write_str(&driver_override, "\n").ok();
+
+    Ok(())
 }
