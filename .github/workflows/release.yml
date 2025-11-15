@@ -1,0 +1,47 @@
+name: release
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release --locked
+      - name: Tarball
+        run: |
+          mkdir -p dist
+          ver=${GITHUB_REF#refs/tags/v}
+          mkdir -p nvbind-$ver
+          cp -r nvbind-core nvbindd nvbind-tray Cargo.toml Cargo.lock packaging README.md LICENSE nvbind-$ver/
+          tar czf dist/nvbind-$ver.tar.gz nvbind-$ver
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+  aur:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update AUR pkg
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          PKGNAME: nvbind
+        run: |
+          eval "$(ssh-agent -s)"
+          ssh-add - <<< "$AUR_SSH_KEY"
+          git config --global user.email "aur-bot@example.com"
+          git config --global user.name "aur-bot"
+          git clone ssh://aur@aur.archlinux.org/${PKGNAME}.git aurrepo
+          ver=${GITHUB_REF#refs/tags/v}
+          sed -i "s/pkgver=.*/pkgver=$ver/" PKGBUILD || true
+          cp PKGBUILD aurrepo/
+          cd aurrepo
+          makepkg --printsrcinfo > .SRCINFO
+          git add PKGBUILD .SRCINFO
+          git commit -m "release v$ver"
+          git push
