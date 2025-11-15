@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=NVBind Tray
+Comment=NVIDIA GPU binding tray
+Exec=/usr/bin/nvbind-tray
+Terminal=false
+Type=Application
+Icon=video-display
+Categories=Utility;
+X-GNOME-Autostart-enabled=true

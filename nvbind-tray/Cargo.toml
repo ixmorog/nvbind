@@ -1,0 +1,16 @@
+[package]
+name = "nvbind-tray"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+zbus = { workspace = true }
+gtk = { version = "0.18", package = "gtk", features = ["v3_24"] }
+libappindicator = "0.7"
+notify-rust = "4"
+nvbind-core = { path = "../nvbind-core" }
