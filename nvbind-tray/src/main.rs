@@ -160,10 +160,7 @@ impl ksni::Tray for MyTray {
 
                 items.push(
                     menu::StandardItem {
-                        label: format!(
-                            "  → Bind to nvidia ({})",
-                            video_bdf.as_deref().unwrap_or("n/a")
-                        ),
+                        label: "  →  Bind to nvidia".to_string(),
                         enabled: has_video,
                         activate: Box::new(move |this: &mut MyTray| {
                             if nvidia_targets_for_bind.is_empty() {
@@ -181,7 +178,7 @@ impl ksni::Tray for MyTray {
 
                 items.push(
                     menu::StandardItem {
-                        label: format!("  → Bind to vfio-pci ({})", format_bdf_list(&vfio_targets)),
+                        label: "  →  Bind to vfio-pci".to_string(),
                         enabled: has_devices,
                         activate: Box::new(move |this: &mut MyTray| {
                             if vfio_targets_for_bind.is_empty() {
@@ -199,7 +196,7 @@ impl ksni::Tray for MyTray {
 
                 items.push(
                     menu::StandardItem {
-                        label: format!("  → Unbind ({})", format_bdf_list(&vfio_targets)),
+                        label: "  →  Unbind".to_string(),
                         enabled: has_devices,
                         activate: Box::new(move |this: &mut MyTray| {
                             if vfio_targets_for_unbind.is_empty() {
@@ -256,12 +253,24 @@ fn split_bdf(bdf: &str) -> (String, Option<String>) {
 }
 
 fn format_group_header(group: &DeviceGroup) -> String {
-    let mut parts = vec![
-        format_device_or_placeholder(group.video.as_ref(), &group.base, "0", "video"),
-        format_device_or_placeholder(group.audio.as_ref(), &group.base, "1", "audio"),
+    let mut sections = vec![
+        format!(
+            "video: {}",
+            format_device_or_placeholder(group.video.as_ref(), &group.base, "0", "video")
+        ),
+        format!(
+            "audio: {}",
+            format_device_or_placeholder(group.audio.as_ref(), &group.base, "1", "audio")
+        ),
     ];
-    parts.extend(group.others.iter().map(format_device));
-    parts.join(" | ")
+    sections.extend(
+        group
+            .others
+            .iter()
+            .map(|gpu| format!("other: {}", format_device(gpu))),
+    );
+
+    sections.join("\n")
 }
 
 fn format_device(gpu: &Gpu) -> String {
