@@ -69,7 +69,7 @@ impl DeviceGroup {
 #[derive(Clone)]
 struct Shared {
     status: Arc<Mutex<Status>>,
-    tx: UnboundedSender<Command>, // Fan-out channel into the async worker runtime.
+    tx: UnboundedSender<Command>,
 }
 
 #[derive(Clone)]
