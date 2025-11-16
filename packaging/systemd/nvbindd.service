@@ -1,5 +1,5 @@
 [Unit]
-Description=NVBind Daemon (NVIDIA GPU binding manager)
+Description=NvBind Daemon (NVIDIA GPU Binding manager)
 After=network.target dbus.service
 Requires=dbus.service
 

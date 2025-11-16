@@ -71,13 +71,10 @@ fn read_driver_name(driver_link: &Path) -> Option<String> {
 }
 
 fn ensure_module_loaded(name: &str) -> Result<()> {
-    // если директория драйвера уже есть — всё ок
     let dir = format!("/sys/bus/pci/drivers/{}", name);
     if Path::new(&dir).exists() {
         return Ok(());
     }
-    // иначе пробуем загрузить модуль
-    // (демон под root, так что modprobe допустим)
     let st = std::process::Command::new("modprobe")
         .arg(name)
         .status()
@@ -91,18 +88,6 @@ fn ensure_module_loaded(name: &str) -> Result<()> {
 fn write_str(path: &Path, val: &str) -> Result<()> {
     debug!("writing '{}' to {}", val, path.display());
     fs::write(path, val).with_context(|| format!("write to {}", path.display()))
-}
-
-fn ensure_module(modname: &str) -> Result<()> {
-    // Lightweight: try writing to /sbin/modprobe via /proc
-    // Fallback: /usr/bin/modprobe on PATH
-    let status = std::process::Command::new("modprobe")
-        .arg(modname)
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("modprobe {} failed with {:?}", modname, status);
-    }
-    Ok(())
 }
 
 pub fn unbind(bdf: &str) -> Result<()> {
@@ -119,10 +104,45 @@ pub fn unbind(bdf: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn bind_to_nvidia(bdf: &str) -> Result<()> {
-    ensure_module("nvidia")?;
-    let path = PathBuf::from("/sys/bus/pci/drivers/nvidia/bind");
-    write_str(&path, bdf)
+fn resolve_modalias_driver(dev: &Path) -> Result<String> {
+    let alias_path = dev.join("modalias");
+    let alias = fs::read_to_string(&alias_path)
+        .with_context(|| format!("read {}", alias_path.display()))?;
+    let alias = alias.trim();
+    if alias.is_empty() {
+        anyhow::bail!("device {} has empty modalias", dev.display());
+    }
+
+    let output = std::process::Command::new("modprobe")
+        .arg("--resolve-alias")
+        .arg(alias)
+        .output()
+        .context("resolve driver via modprobe")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "modprobe --resolve-alias {} failed with status {}",
+            alias,
+            output.status
+        );
+    }
+    let stdout = String::from_utf8(output.stdout).context("parse modprobe output")?;
+    if let Some(module) = stdout
+        .lines()
+        .map(|l| l.trim())
+        .find(|line| !line.is_empty())
+    {
+        Ok(module.to_string())
+    } else {
+        anyhow::bail!("no driver module found for alias {}", alias);
+    }
+}
+
+pub fn bind_to_native_driver(bdf: &str) -> Result<()> {
+    let (dev, _driver_link, _driver_override) = dev_paths(bdf);
+    let driver = resolve_modalias_driver(&dev)?;
+    ensure_module_loaded(&driver)?;
+    let bind_path = PathBuf::from(format!("/sys/bus/pci/drivers/{}/bind", driver));
+    write_str(&bind_path, bdf)
 }
 
 fn dev_paths(bdf: &str) -> (PathBuf, PathBuf, PathBuf) {

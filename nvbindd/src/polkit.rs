@@ -1,8 +1,8 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::Serialize;
 use std::collections::HashMap;
 use zbus::zvariant::{OwnedValue, Type};
-use zbus::{names::BusName, Connection, Proxy};
+use zbus::{Connection, Proxy, names::BusName};
 
 /// Polkit subject is a DBus STRUCT: (s, a{sv})
 /// Use positional fields + `Serialize` to encode as a struct, NOT a dict.

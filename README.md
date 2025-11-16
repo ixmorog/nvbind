@@ -35,7 +35,7 @@ at object path `/org/example/NvBind` and invoke the following methods:
 | Method            | Purpose |
 | ----------------- | ------- |
 | `GetStatus()`     | Returns a JSON string that contains all NVIDIA GPUs and their current drivers. |
-| `BindToNvidia(s)` | Unbinds the given BDF from its current driver and attaches it to the `nvidia` driver. |
+| `BindToNvidia(s)` | Unbinds the given BDF and reattaches it to the appropriate host driver (display functions go to `nvidia`, audio/USB functions are resolved via the PCI modalias). |
 | `BindToVfio(s)`   | Same as above but binds to `vfio-pci`. |
 | `Unbind(s)`       | Only performs the unbind step, leaving the device driverless. |
 

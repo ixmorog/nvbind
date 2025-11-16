@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=NVBind Tray
+Name=NvBind Tray
 Comment=NVIDIA GPU binding tray
 Exec=/usr/bin/nvbind-tray
 Terminal=false

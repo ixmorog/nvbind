@@ -93,7 +93,7 @@ impl ksni::Tray for MyTray {
         "nvbind-tray".into()
     }
     fn title(&self) -> String {
-        "NVBind".into()
+        "NvBind".into()
     }
     fn icon_name(&self) -> String {
         "video-display".into()
@@ -107,8 +107,8 @@ impl ksni::Tray for MyTray {
     }
     fn tool_tip(&self) -> ToolTip {
         ToolTip {
-            title: "NVBind".into(),
-            description: "NVIDIA GPU binding manager".into(),
+            title: "NvBind".into(),
+            description: "NVIDIA GPU Binding manager".into(),
             ..Default::default()
         }
     }
@@ -150,7 +150,8 @@ impl ksni::Tray for MyTray {
                 );
 
                 let video_bdf = group.video.as_ref().map(|g| g.bdf.clone());
-                let video_bdf_for_closure = video_bdf.clone();
+                let nvidia_targets = group.all_bdfs();
+                let nvidia_targets_for_bind = nvidia_targets.clone();
                 let vfio_targets = group.all_bdfs();
                 let vfio_targets_for_bind = vfio_targets.clone();
                 let vfio_targets_for_unbind = vfio_targets.clone();
@@ -165,10 +166,13 @@ impl ksni::Tray for MyTray {
                         ),
                         enabled: has_video,
                         activate: Box::new(move |this: &mut MyTray| {
-                            if let Some(bdf) = &video_bdf_for_closure {
-                                let _ =
-                                    this.shared.tx.send(Command::BindVideoToNvidia(bdf.clone()));
+                            if nvidia_targets_for_bind.is_empty() {
+                                return;
                             }
+                            let _ = this
+                                .shared
+                                .tx
+                                .send(Command::BindGroupToNvidia(nvidia_targets_for_bind.clone()));
                         }),
                         ..Default::default()
                     }
@@ -321,7 +325,7 @@ async fn call_many_async(method: &str, bdfs: &[String]) -> Result<()> {
 
 enum Command {
     Refresh,
-    BindVideoToNvidia(String),
+    BindGroupToNvidia(Vec<String>),
     BindGroupToVfio(Vec<String>),
     UnbindGroup(Vec<String>),
 }
@@ -349,11 +353,11 @@ fn main() -> Result<()> {
                         });
                     }
                     UiEvent::NotifyOk(msg) => {
-                        Notification::new().summary("NVBind").body(&msg).show().ok();
+                        Notification::new().summary("NvBind").body(&msg).show().ok();
                     }
                     UiEvent::NotifyErr(msg) => {
                         Notification::new()
-                            .summary("NVBind error")
+                            .summary("NvBind error")
                             .body(&msg)
                             .show()
                             .ok();
@@ -398,11 +402,14 @@ fn main() -> Result<()> {
                                     Err(e) => { let _ = ux_tx.send(UiEvent::NotifyErr(format!("{:#}", e))); }
                                 }
                             }
-                            Command::BindVideoToNvidia(bdf) => {
-                                match call_method_async("BindToNvidia", &bdf).await {
+                            Command::BindGroupToNvidia(bdfs) => {
+                                match call_many_async("BindToNvidia", &bdfs).await {
                                     Ok(_) => {
-                                        let _ = ux_tx
-                                            .send(UiEvent::NotifyOk(format!("Bound {} to nvidia", bdf)));
+                                        let msg = format!(
+                                            "Bound {} to host drivers",
+                                            format_bdf_list(&bdfs)
+                                        );
+                                        let _ = ux_tx.send(UiEvent::NotifyOk(msg));
                                         let _ = trigger_refresh(&ux_tx).await;
                                     }
                                     Err(e) => { let _ = ux_tx.send(UiEvent::NotifyErr(format!("{:#}", e))); }

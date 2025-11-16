@@ -1,13 +1,13 @@
 mod polkit;
 
 use anyhow::Result;
-use nvbind_core::{bind_to_nvidia, bind_to_vfio, list_nvidia_gpus, unbind};
+use nvbind_core::{bind_to_native_driver, bind_to_vfio, list_nvidia_gpus, unbind};
 use serde::{Deserialize, Serialize};
 use tokio::signal;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use zbus::message::Header;
-use zbus::{fdo, interface, Connection};
+use zbus::{Connection, fdo, interface};
 
 const BUS_NAME: &str = "org.example.NvBind";
 const OBJ_PATH: &str = "/org/example/NvBind";
@@ -38,7 +38,7 @@ impl NvBindIface {
             .await
             .map_err(map_e)?;
         unbind(bdf).map_err(map_e)?;
-        bind_to_nvidia(bdf).map_err(map_e)?;
+        bind_to_native_driver(bdf).map_err(map_e)?;
         Ok(())
     }
 
