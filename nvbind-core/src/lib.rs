@@ -7,6 +7,8 @@ use std::{
 };
 use tracing::debug;
 
+const PREFERRED_PCI_DRIVERS: &[&str] = &["nvidia", "nouveau"];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Gpu {
     pub bdf: String,            // 0000:01:00.0
@@ -126,21 +128,88 @@ fn resolve_modalias_driver(dev: &Path) -> Result<String> {
         );
     }
     let stdout = String::from_utf8(output.stdout).context("parse modprobe output")?;
-    if let Some(module) = stdout
+    let modules: Vec<String> = stdout
         .lines()
         .map(|l| l.trim())
-        .find(|line| !line.is_empty())
-    {
-        Ok(module.to_string())
-    } else {
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_string())
+        .collect();
+
+    if modules.is_empty() {
         anyhow::bail!("no driver module found for alias {}", alias);
+    }
+
+    select_preferred_driver(&modules)
+        .ok_or_else(|| anyhow::anyhow!("no driver module found for alias {}", alias))
+}
+
+fn select_preferred_driver(modules: &[String]) -> Option<String> {
+    for preferred in PREFERRED_PCI_DRIVERS {
+        if let Some(found) = modules.iter().find(|m| m == preferred) {
+            return Some(found.clone());
+        }
+    }
+    modules.first().cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_preferred_driver;
+
+    #[test]
+    fn prefers_nvidia_over_nouveau() {
+        let modules = vec![
+            "nouveau".to_string(),
+            "nvidia_drm".to_string(),
+            "nvidia".to_string(),
+        ];
+        assert_eq!(
+            select_preferred_driver(&modules),
+            Some("nvidia".to_string())
+        );
+    }
+
+    #[test]
+    fn falls_back_to_nouveau_if_nvidia_missing() {
+        let modules = vec!["nouveau".to_string(), "nvidia_drm".to_string()];
+        assert_eq!(
+            select_preferred_driver(&modules),
+            Some("nouveau".to_string())
+        );
+    }
+
+    #[test]
+    fn keeps_first_when_no_preference_defined() {
+        let modules = vec!["foo".to_string(), "bar".to_string()];
+        assert_eq!(select_preferred_driver(&modules), Some("foo".to_string()));
     }
 }
 
+
 pub fn bind_to_native_driver(bdf: &str) -> Result<()> {
-    let (dev, _driver_link, _driver_override) = dev_paths(bdf);
+    let (dev, driver_link, driver_override) = dev_paths(bdf);
     let driver = resolve_modalias_driver(&dev)?;
     ensure_module_loaded(&driver)?;
+
+    // Clear any previous driver override (e.g. after binding to vfio-pci)
+    if driver_override.exists() {
+        let _ = write_str(&driver_override, "\n");
+    }
+
+    // If the device is already bound to the target driver we are done. Otherwise,
+    // unbind from the current driver before attempting to bind to the new one.
+    if let Some(current_driver) = read_driver_name(&driver_link) {
+        if current_driver == driver {
+            return Ok(());
+        }
+
+        let unbind_path = PathBuf::from(format!(
+            "/sys/bus/pci/drivers/{}/unbind",
+            current_driver
+        ));
+        write_str(&unbind_path, bdf)?;
+    }
+
     let bind_path = PathBuf::from(format!("/sys/bus/pci/drivers/{}/bind", driver));
     write_str(&bind_path, bdf)
 }
