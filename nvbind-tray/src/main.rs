@@ -96,7 +96,8 @@ impl ksni::Tray for MyTray {
         "NvBind".into()
     }
     fn icon_name(&self) -> String {
-        "video-display".into()
+        let status = self.shared.status.lock().unwrap();
+        icon_name_for(&status).to_string()
     }
     fn icon_pixmap(&self) -> Vec<Icon> {
         vec![Icon {
@@ -296,6 +297,27 @@ fn format_bdf_list(bdfs: &[String]) -> String {
     } else {
         bdfs.join(", ")
     }
+}
+
+fn icon_name_for(status: &Status) -> &'static str {
+    if status.gpus.is_empty() {
+        return "nvbind-unbound";
+    }
+
+    let all_vfio = status
+        .gpus
+        .iter()
+        .all(|gpu| matches!(gpu.driver.as_deref(), Some("vfio-pci")));
+    if all_vfio {
+        return "nvbind-vfio";
+    }
+
+    let all_unbound = status.gpus.iter().all(|gpu| gpu.driver.is_none());
+    if all_unbound {
+        return "nvbind-unbound";
+    }
+
+    "nvbind-nvidia"
 }
 
 async fn fetch_status_async() -> Result<Status> {
